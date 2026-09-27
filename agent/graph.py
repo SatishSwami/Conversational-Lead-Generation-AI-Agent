@@ -8,7 +8,7 @@ from functools import partial
 from typing import Literal
 
 from langgraph.graph import StateGraph, END
-
+from core.llm import build_llm
 from agent.state import AgentState
 from agent.intent_classifier import Intent
 from agent.nodes import (
@@ -18,45 +18,6 @@ from agent.nodes import (
     node_generate_response,
     node_activate_lead_flow,
 )
-
-
-# ---------------------------------------------------------------------------
-# LLM Factory
-# ---------------------------------------------------------------------------
-
-def build_llm(provider: str = "anthropic", model: str = None):
-    """
-    Builds and returns an LLM client.
-    Supports: anthropic (Claude), openai (GPT), google (Gemini).
-    Set the corresponding API key in environment variables.
-    """
-    if provider == "anthropic":
-        from langchain_anthropic import ChatAnthropic
-        return ChatAnthropic(
-            model=model or "claude-haiku-4-5",
-            api_key=os.environ.get("ANTHROPIC_API_KEY"),
-            temperature=0.4,
-            max_tokens=1024,
-        )
-    elif provider == "openai":
-        from langchain_openai import ChatOpenAI
-        return ChatOpenAI(
-            model=model or "gpt-4o-mini",
-            api_key=os.environ.get("OPENAI_API_KEY"),
-            temperature=0.4,
-            max_tokens=1024,
-        )
-    elif provider == "google":
-        from langchain_google_genai import ChatGoogleGenerativeAI
-        return ChatGoogleGenerativeAI(
-            model=model or "gemini-1.5-flash",
-            google_api_key=os.environ.get("GOOGLE_API_KEY"),
-            temperature=0.4,
-            max_output_tokens=1024,
-        )
-    else:
-        raise ValueError(f"Unsupported LLM provider: {provider}. Use 'anthropic', 'openai', or 'google'.")
-
 
 # ---------------------------------------------------------------------------
 # Conditional Edge Routing
