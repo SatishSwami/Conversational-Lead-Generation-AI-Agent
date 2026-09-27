@@ -11,6 +11,9 @@ Exposes REST endpoints for:
 
 WhatsApp integration uses the Meta Cloud API (Webhooks).
 """
+import re
+import time
+import uuid
 
 import hashlib
 import hmac
@@ -60,6 +63,87 @@ app = FastAPI(
     version=settings.app_version,
 )
 
+# ---------------------------------------------------------------------------
+# Request Observability
+# ---------------------------------------------------------------------------
+
+REQUEST_ID_PATTERN = re.compile(
+    r"^[A-Za-z0-9_.:-]{1,128}$"
+)
+
+
+def _get_request_id(request: Request) -> str:
+    """
+    Return a safe request correlation ID.
+
+    A valid client-provided ID is preserved. Otherwise, generate
+    a new UUID-based correlation ID.
+    """
+    incoming_request_id = request.headers.get(
+        "X-Request-ID",
+        "",
+    ).strip()
+
+    if incoming_request_id and REQUEST_ID_PATTERN.fullmatch(
+        incoming_request_id
+    ):
+        return incoming_request_id
+
+    return uuid.uuid4().hex
+
+
+@app.middleware("http")
+async def request_observability(
+    request: Request,
+    call_next,
+):
+    """
+    Add request correlation and latency logging.
+
+    The middleware intentionally logs only request metadata.
+    It never logs request bodies or user message content.
+    """
+    request_id = _get_request_id(request)
+    request.state.request_id = request_id
+
+    started_at = time.perf_counter()
+
+    try:
+        response = await call_next(request)
+
+    except Exception:
+        duration_ms = (
+            time.perf_counter() - started_at
+        ) * 1000
+
+        logger.exception(
+            "Request failed | request_id=%s method=%s "
+            "path=%s duration_ms=%.2f",
+            request_id,
+            request.method,
+            request.url.path,
+            duration_ms,
+        )
+
+        raise
+
+    duration_ms = (
+        time.perf_counter() - started_at
+    ) * 1000
+
+    response.headers["X-Request-ID"] = request_id
+
+    logger.info(
+        "Request completed | request_id=%s method=%s "
+        "path=%s status=%s duration_ms=%.2f",
+        request_id,
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+    )
+
+    return response
 
 # ---------------------------------------------------------------------------
 # Config

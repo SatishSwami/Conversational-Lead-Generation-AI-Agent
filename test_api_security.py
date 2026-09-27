@@ -1,6 +1,8 @@
 import hashlib
 import hmac
 
+import re
+
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -219,3 +221,82 @@ def test_development_allows_missing_whatsapp_secret(monkeypatch):
         b'{"test":"payload"}',
         "",
     )
+
+# ---------------------------------------------------------------------------
+# Request Observability
+# ---------------------------------------------------------------------------
+
+
+def test_request_id_is_preserved(client):
+    request_id = "test-request-123"
+
+    response = client.post(
+        "/chat",
+        headers={
+            "X-Request-ID": request_id,
+        },
+        json={
+            "session_id": "test-session",
+            "message": "",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.headers["X-Request-ID"] == request_id
+
+
+def test_request_id_is_generated_when_missing(client):
+    response = client.post(
+        "/chat",
+        json={
+            "session_id": "test-session",
+            "message": "",
+        },
+    )
+
+    assert response.status_code == 422
+
+    request_id = response.headers.get("X-Request-ID")
+
+    assert request_id is not None
+    assert re.fullmatch(
+        r"[0-9a-f]{32}",
+        request_id,
+    )
+
+
+def test_invalid_request_id_is_replaced(client):
+    response = client.post(
+        "/chat",
+        headers={
+            "X-Request-ID": "invalid request id!",
+        },
+        json={
+            "session_id": "test-session",
+            "message": "",
+        },
+    )
+
+    assert response.status_code == 422
+
+    request_id = response.headers.get("X-Request-ID")
+
+    assert request_id is not None
+    assert request_id != "invalid request id!"
+    assert re.fullmatch(
+        r"[0-9a-f]{32}",
+        request_id,
+    )
+
+
+def test_request_id_is_returned_for_health_endpoint(client):
+    request_id = "health-check-001"
+
+    response = client.get(
+        "/health",
+        headers={
+            "X-Request-ID": request_id,
+        },
+    )
+
+    assert response.headers["X-Request-ID"] == request_id
