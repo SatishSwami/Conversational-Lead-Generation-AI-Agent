@@ -1,12 +1,13 @@
 import os
+import uuid
 
 os.environ["LLM_PROVIDER"] = "google"
 
-from database.connection import SessionLocal
-from database.repository import ConversationRepository, LeadRepository
-
 
 def test_database_repositories_are_available():
+    from database.connection import SessionLocal
+    from database.repository import ConversationRepository, LeadRepository
+
     db = SessionLocal()
 
     try:
@@ -18,12 +19,13 @@ def test_database_repositories_are_available():
     finally:
         db.close()
 
+
 def test_run_agent_persists_messages_and_lead(monkeypatch):
     from webhook_server import _run_agent
     from database.connection import SessionLocal
-    from database.repository import ConversationRepository, LeadRepository
+    from database.repository import ConversationRepository
 
-    session_id = "integration-test-session"
+    session_id = f"integration-test-session-{uuid.uuid4()}"
 
     class FakeGraph:
         def invoke(self, state):
@@ -57,8 +59,10 @@ def test_run_agent_persists_messages_and_lead(monkeypatch):
         messages = conversation_repo.get_messages(session_id)
 
         assert len(messages) == 2
+
         assert messages[0].role == "user"
         assert messages[0].content == "How much is the Pro plan?"
+
         assert messages[1].role == "assistant"
         assert messages[1].content == "The Pro plan costs $79/month."
 
@@ -71,7 +75,7 @@ def test_run_agent_persists_captured_lead(monkeypatch):
     from database.connection import SessionLocal
     from database.repository import LeadRepository
 
-    session_id = "lead-integration-test"
+    session_id = f"lead-integration-test-{uuid.uuid4()}"
 
     class FakeGraph:
         def invoke(self, state):
@@ -97,7 +101,10 @@ def test_run_agent_persists_captured_lead(monkeypatch):
 
     result = _run_agent(
         session_id=session_id,
-        user_message="My name is Satish, email is satish@example.com, and I use YouTube.",
+        user_message=(
+            "My name is Satish, email is satish@example.com, "
+            "and I use YouTube."
+        ),
     )
 
     assert result["lead_captured"] is True
@@ -114,4 +121,4 @@ def test_run_agent_persists_captured_lead(monkeypatch):
         assert lead.platform == "YouTube"
 
     finally:
-        db.close()  
+        db.close()

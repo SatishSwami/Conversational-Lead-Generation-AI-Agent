@@ -20,8 +20,10 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from sqlalchemy import text
+from core.config import get_settings
 
 load_dotenv()
+settings = get_settings()
 
 from agent.graph import AutoStreamAgent, build_llm
 from agent.state import AgentState
@@ -42,12 +44,13 @@ app = FastAPI(
 )
 
 # ---- Config ----
-LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "anthropic")
-LLM_MODEL    = os.environ.get("LLM_MODEL", None)
-WA_VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "autostream_verify_2024")
-WA_APP_SECRET   = os.environ.get("WHATSAPP_APP_SECRET", "")
-WA_ACCESS_TOKEN = os.environ.get("WHATSAPP_ACCESS_TOKEN", "")
-WA_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "")
+LLM_PROVIDER = settings.llm_provider
+LLM_MODEL = settings.llm_model
+
+WA_VERIFY_TOKEN = settings.whatsapp_verify_token
+WA_APP_SECRET = settings.whatsapp_app_secret or ""
+WA_ACCESS_TOKEN = settings.whatsapp_access_token or ""
+WA_PHONE_NUMBER_ID = settings.whatsapp_phone_number_id or ""
 
 # Shared LLM instance (expensive to init per request)
 _llm = None
@@ -387,9 +390,8 @@ async def whatsapp_webhook(request: Request):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
-        "webhook_server:app",
-        host="0.0.0.0",
-        port=int(os.environ.get("PORT", 8000)),
-        reload=os.environ.get("ENV", "production") == "development",
-        log_level="info",
-    )
+    app,
+    host="0.0.0.0",
+    port=settings.port,
+    reload=settings.environment == "development",
+ )

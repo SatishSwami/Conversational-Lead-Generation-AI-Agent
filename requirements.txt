@@ -30,3 +30,5 @@ Pillow==10.0.1
 numpy==1.27.6
 
 SQLAlchemy>=2.0,<3.0
+
+pydantic-settings>=2.0,<3.0

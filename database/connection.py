@@ -5,20 +5,17 @@ SQLite is used by default for local development.
 PostgreSQL can be configured through DATABASE_URL.
 """
 
-import os
-from pathlib import Path
 from typing import Generator
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from core.config import get_settings
 
-DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "autostream.db"
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    f"sqlite:///{DEFAULT_DB_PATH}",
-)
+settings = get_settings()
+
+DATABASE_URL = settings.database_url
 
 connect_args = {}
 
@@ -52,5 +49,4 @@ def init_db() -> None:
     """Create database tables."""
     from database.models import Base
 
-    DEFAULT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(bind=engine)
