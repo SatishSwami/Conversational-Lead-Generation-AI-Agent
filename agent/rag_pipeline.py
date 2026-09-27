@@ -38,9 +38,7 @@ MIN_RELEVANCE_SCORE = 0.0
 
 
 def _load_knowledge_base() -> dict:
-    """
-    Load the AutoStream knowledge base from the local JSON file.
-    """
+    """Load the AutoStream knowledge base from the local JSON file."""
     with open(
         KB_PATH,
         "r",
@@ -173,9 +171,7 @@ def _tokenize(text: str) -> List[str]:
 def _compute_tf(
     tokens: List[str],
 ) -> Dict[str, float]:
-    """
-    Compute normalized term frequency for one document.
-    """
+    """Compute normalized term frequency for one document."""
     if not tokens:
         return {}
 
@@ -197,9 +193,7 @@ def _compute_tf(
 def _compute_idf(
     docs_tokens: List[List[str]],
 ) -> Dict[str, float]:
-    """
-    Compute smoothed inverse document frequency.
-    """
+    """Compute smoothed inverse document frequency."""
     document_count = len(docs_tokens)
 
     if document_count == 0:
@@ -239,9 +233,6 @@ def _tfidf_score(
     """
     Calculate a TF-IDF relevance score between a query
     and document.
-
-    Query terms that appear in the document receive a
-    relevance contribution weighted by IDF.
     """
     if not query_tokens:
         return 0.0
@@ -259,6 +250,91 @@ def _tfidf_score(
 
 
 # ---------------------------------------------------------------------------
+# Query Intent Helpers
+# ---------------------------------------------------------------------------
+
+
+def _has_any_term(
+    query: str,
+    terms: List[str],
+) -> bool:
+    """Return True when any term appears in the normalized query."""
+    return any(
+        re.search(
+            rf"\b{re.escape(term)}\b",
+            query,
+        )
+        for term in terms
+    )
+
+
+def _detect_query_intents(query: str) -> set[str]:
+    """
+    Detect lightweight business intents used to improve retrieval.
+
+    This is intentionally deterministic and complements TF-IDF rather
+    than replacing it.
+    """
+    intents = set()
+
+    pricing_terms = [
+        "plan",
+        "plans",
+        "pricing",
+        "price",
+        "cost",
+        "costs",
+        "subscription",
+        "subscriptions",
+        "monthly",
+        "annual",
+        "yearly",
+        "offer",
+        "offers",
+    ]
+
+    refund_terms = [
+        "refund",
+        "refunds",
+        "money back",
+    ]
+
+    support_terms = [
+        "support",
+        "customer service",
+        "help",
+    ]
+
+    trial_terms = [
+        "trial",
+        "free trial",
+    ]
+
+    cancellation_terms = [
+        "cancel",
+        "cancellation",
+        "unsubscribe",
+    ]
+
+    if _has_any_term(query, pricing_terms):
+        intents.add("pricing")
+
+    if _has_any_term(query, refund_terms):
+        intents.add("refund")
+
+    if _has_any_term(query, support_terms):
+        intents.add("support")
+
+    if _has_any_term(query, trial_terms):
+        intents.add("trial")
+
+    if _has_any_term(query, cancellation_terms):
+        intents.add("cancellation")
+
+    return intents
+
+
+# ---------------------------------------------------------------------------
 # RAG Pipeline
 # ---------------------------------------------------------------------------
 
@@ -268,8 +344,12 @@ class RAGPipeline:
     Lightweight TF-IDF retrieval pipeline over the
     AutoStream local knowledge base.
 
-    The pipeline is deterministic and requires no
-    external vector database or network connection.
+    Retrieval combines:
+    - TF-IDF lexical scoring
+    - Exact phrase matching
+    - Important product/entity matching
+    - Business-intent matching
+    - Common product-question phrase matching
     """
 
     def __init__(self):
@@ -301,12 +381,6 @@ class RAGPipeline:
         """
         Retrieve the most relevant documents.
 
-        Retrieval combines:
-        - TF-IDF lexical scoring
-        - Exact phrase matching
-        - Important product/entity matching
-        - Common product-question phrase matching
-
         Returns:
             List of tuples:
                 (document_text, score, source)
@@ -330,6 +404,11 @@ class RAGPipeline:
             return []
 
         query_lower = query.lower()
+        normalized_query = " ".join(query_tokens)
+
+        query_intents = _detect_query_intents(
+            query_lower
+        )
 
         scored_documents = []
 
@@ -353,10 +432,6 @@ class RAGPipeline:
             # ---------------------------------------------------------------
             # Exact phrase boost
             # ---------------------------------------------------------------
-
-            normalized_query = " ".join(
-                query_tokens
-            )
 
             normalized_document = " ".join(
                 _tokenize(document_text)
@@ -393,6 +468,59 @@ class RAGPipeline:
                     score += 0.5
 
             # ---------------------------------------------------------------
+            # Business-intent matching
+            # ---------------------------------------------------------------
+
+            if "pricing" in query_intents:
+                if document["source"] == "pricing":
+                    score += 3.0
+
+                # Pricing questions can also benefit from usage/feature
+                # information, but pricing documents should rank first.
+                if (
+                    document["source"] == "policy"
+                    and (
+                        "usage" in document_lower
+                        or "plan" in document_lower
+                    )
+                ):
+                    score += 0.75
+
+            if "refund" in query_intents:
+                if (
+                    document["source"] == "policy"
+                    and "refund" in document_lower
+                ):
+                    score += 3.0
+
+            if "support" in query_intents:
+                if (
+                    document["source"] == "policy"
+                    and "support" in document_lower
+                ):
+                    score += 3.0
+
+                if (
+                    document["source"] == "pricing"
+                    and "support" in document_lower
+                ):
+                    score += 0.5
+
+            if "trial" in query_intents:
+                if (
+                    document["source"] == "policy"
+                    and "trial" in document_lower
+                ):
+                    score += 3.0
+
+            if "cancellation" in query_intents:
+                if (
+                    document["source"] == "policy"
+                    and "cancel" in document_lower
+                ):
+                    score += 3.0
+
+            # ---------------------------------------------------------------
             # Question phrase matching
             # ---------------------------------------------------------------
 
@@ -408,6 +536,12 @@ class RAGPipeline:
                     "24/7 support",
                     "ai captions",
                     "unlimited videos",
+                    "what plans",
+                    "which plans",
+                    "what plan",
+                    "which plan",
+                    "plan do you offer",
+                    "plans do you offer",
                 )
                 if phrase in query_lower
             ]
@@ -459,10 +593,9 @@ class RAGPipeline:
 
         context_parts = []
 
-        for index, (
-            text,
-            score,
-            source,
+        for (
+            index,
+            (text, score, source),
         ) in enumerate(results, 1):
             context_parts.append(
                 f"[Source: {source}]\n"

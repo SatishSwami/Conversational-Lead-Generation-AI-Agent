@@ -3,7 +3,7 @@
 
 # --- Core Framework ---
 langchain==0.3.25
-langchain-core==0.3.57
+langchain-core==0.3.58
 langchain-community==0.3.23
 langgraph==0.4.1
 
@@ -27,7 +27,7 @@ pytest==8.3.5
 pytest-asyncio==0.26.0
 opencv-python==4.8.1.78
 Pillow==10.0.1
-numpy==1.27.6
+numpy==1.26.4
 
 SQLAlchemy>=2.0,<3.0
 
