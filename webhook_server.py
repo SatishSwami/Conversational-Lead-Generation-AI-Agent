@@ -19,15 +19,21 @@ from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from sqlalchemy import text
 
 load_dotenv()
 
 from agent.graph import AutoStreamAgent, build_llm
 from agent.state import AgentState
 from utils.session_manager import get_session_store
-from utils.logger import get_logger
+from utils.logger import get_logger 
+
+from database.connection import SessionLocal, init_db
+from database.repository import ConversationRepository, LeadRepository
 
 logger = get_logger("webhook_server")
+# Initialize persistent database tables.
+init_db()
 
 app = FastAPI(
     title="AutoStream AI Agent API",
@@ -96,18 +102,77 @@ def _get_or_create_state(session_id: str) -> AgentState:
 
 
 def _run_agent(session_id: str, user_message: str) -> dict:
+    """
+    Run the LangGraph agent and persist conversation data.
+
+    The existing in-memory SessionStore remains responsible for
+    active LangGraph state, while SQLAlchemy provides durable
+    conversation and lead persistence.
+    """
     from langchain_core.messages import HumanMessage
 
     graph = get_shared_graph()
     store = get_session_store()
+
     state = _get_or_create_state(session_id)
 
-    state["messages"] = list(state.get("messages", [])) + [HumanMessage(content=user_message)]
+    db = SessionLocal()
 
-    result = graph.invoke(state)
-    store.set(session_id, result)
+    try:
+        conversation_repo = ConversationRepository(db)
+        lead_repo = LeadRepository(db)
 
-    return result
+        # Ensure the conversation exists.
+        conversation_repo.get_or_create_conversation(session_id)
+
+        # Persist the incoming user message.
+        conversation_repo.add_message(
+            session_id=session_id,
+            role="user",
+            content=user_message,
+        )
+
+        # Update in-memory LangGraph state.
+        state["messages"] = list(
+            state.get("messages", [])
+        ) + [HumanMessage(content=user_message)]
+
+        # Execute the existing agent graph.
+        result = graph.invoke(state)
+
+        # Persist the updated LangGraph state for active sessions.
+        store.set(session_id, result)
+
+        # Persist the assistant response.
+        response_text = result.get("response")
+
+        if response_text:
+            conversation_repo.add_message(
+                session_id=session_id,
+                role="assistant",
+                content=response_text,
+            )
+
+        # Persist lead information once the agent has captured it.
+        if result.get("lead_captured"):
+            lead_state = result.get("lead_collector_state") or {}
+
+            name = lead_state.get("name")
+            email = lead_state.get("email")
+            platform = lead_state.get("platform")
+
+            if name and email and platform:
+                lead_repo.create_or_update_lead(
+                    session_id=session_id,
+                    name=name,
+                    email=email,
+                    platform=platform,
+                )
+
+        return result
+
+    finally:
+        db.close()
 
 
 def _verify_whatsapp_signature(payload: bytes, signature_header: str) -> bool:
@@ -148,7 +213,35 @@ async def _send_whatsapp_message(to: str, text: str):
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "service": "AutoStream AI Agent", "version": "1.0.0"}
+    """Health check including database connectivity."""
+
+    db = SessionLocal()
+
+    try:
+        db.execute(text("SELECT 1"))
+
+        return {
+            "status": "ok",
+            "service": "AutoStream AI Agent",
+            "version": "1.0.0",
+            "database": "ok",
+        }
+
+    except Exception as exc:
+        logger.error(f"Database health check failed: {exc}")
+
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "degraded",
+                "service": "AutoStream AI Agent",
+                "version": "1.0.0",
+                "database": "unavailable",
+            },
+        )
+
+    finally:
+        db.close()
 
 
 @app.get("/metrics")
