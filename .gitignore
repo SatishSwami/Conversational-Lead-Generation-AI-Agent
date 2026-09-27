@@ -52,3 +52,5 @@ knowledge_base/
 
 # Sensitive files
 secrets.json
+
+data/
