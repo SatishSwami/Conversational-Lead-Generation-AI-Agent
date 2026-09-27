@@ -80,7 +80,11 @@ Write a warm, enthusiastic closing message:
 # Helper: Extract field from user message
 # ---------------------------------------------------------------------------
 
-def _extract_field_from_message(message: str, field: str, collector: LeadCollector) -> Optional[str]:
+def _extract_field_from_message(
+    message: str,
+    field: str,
+    collector: LeadCollector,
+) -> Optional[str]:
     """
     Tries to extract a specific field value from the user's message.
     Returns extracted value or None.
@@ -88,15 +92,30 @@ def _extract_field_from_message(message: str, field: str, collector: LeadCollect
     message = message.strip()
 
     if field == "email":
-        match = re.search(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", message)
+        match = re.search(
+            r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
+            message,
+        )
         return match.group(0) if match else None
 
     if field == "platform":
-        platforms = ["youtube", "instagram", "tiktok", "twitter", "facebook",
-                     "linkedin", "twitch", "podcast", "vimeo", "snapchat"]
-        for p in platforms:
-            if p in message.lower():
-                return p.capitalize()
+        platforms = [
+            "youtube",
+            "instagram",
+            "tiktok",
+            "twitter",
+            "facebook",
+            "linkedin",
+            "twitch",
+            "podcast",
+            "vimeo",
+            "snapchat",
+        ]
+
+        for platform in platforms:
+            if platform in message.lower():
+                return platform.capitalize()
+
         # If the message is short, treat the whole thing as a platform answer
         if len(message.split()) <= 5:
             return message
@@ -104,18 +123,55 @@ def _extract_field_from_message(message: str, field: str, collector: LeadCollect
     if field == "name":
         # If the message is a short phrase (1-4 words), treat it as a name
         words = message.split()
-        if 1 <= len(words) <= 4 and all(w[0].isupper() or w[0].isalpha() for w in words if w):
+
+        if 1 <= len(words) <= 4 and all(
+            w[0].isupper() or w[0].isalpha()
+            for w in words
+            if w
+        ):
             return message
+
         # Check for patterns like "I'm [Name]" or "my name is [Name]"
         patterns = [
-            r"(?:i'm|i am|my name is|call me|it's|its)\s+([A-Za-z]+(?: [A-Za-z]+)?)",
+            r"(?:i'm|i am|my name is|call me|it's|its)\s+"
+            r"([A-Za-z]+(?: [A-Za-z]+)?)",
         ]
-        for p in patterns:
-            match = re.search(p, message, re.IGNORECASE)
+
+        for pattern in patterns:
+            match = re.search(pattern, message, re.IGNORECASE)
+
             if match:
                 return match.group(1).strip().title()
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Reliability Helpers
+# ---------------------------------------------------------------------------
+
+def _safe_llm_invoke(
+    llm,
+    messages,
+    fallback: str,
+) -> str:
+    """
+    Invoke the configured LLM safely.
+
+    Returns a controlled fallback response if the provider
+    is unavailable or invocation fails.
+    """
+    try:
+        response = llm.invoke(messages)
+        content = getattr(response, "content", None)
+
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+
+        return fallback
+
+    except Exception:
+        return fallback
 
 
 # ---------------------------------------------------------------------------
@@ -127,20 +183,29 @@ def node_classify_intent(state: AgentState, llm) -> dict:
     Node 1: Classify user intent from the latest message.
     """
     messages = state.get("messages", [])
+
     if not messages:
-        return {"current_intent": Intent.GREETING.value}
+        return {
+            "current_intent": Intent.GREETING.value,
+        }
 
     latest_human = None
+
     for msg in reversed(messages):
         if isinstance(msg, HumanMessage):
             latest_human = msg.content
             break
 
     if not latest_human:
-        return {"current_intent": Intent.GREETING.value}
+        return {
+            "current_intent": Intent.GREETING.value,
+        }
 
     conversation_history = [
-        {"role": "user" if isinstance(m, HumanMessage) else "assistant", "content": m.content}
+        {
+            "role": "user" if isinstance(m, HumanMessage) else "assistant",
+            "content": m.content,
+        }
         for m in messages[:-1]
     ]
 
@@ -164,39 +229,65 @@ def node_classify_intent(state: AgentState, llm) -> dict:
 def node_retrieve_context(state: AgentState) -> dict:
     """
     Node 2: Retrieve relevant RAG context if intent requires knowledge base lookup.
+
+    RAG failures are isolated so the conversation can continue.
     """
     intent = state.get("current_intent")
     messages = state.get("messages", [])
 
     if intent == Intent.GREETING.value:
-        return {"rag_context": None}
+        return {
+            "rag_context": None,
+        }
 
     latest_human = None
+
     for msg in reversed(messages):
         if isinstance(msg, HumanMessage):
             latest_human = msg.content
             break
 
     if not latest_human:
-        return {"rag_context": None}
+        return {
+            "rag_context": None,
+        }
 
-    rag = get_rag_pipeline()
-    context = rag.get_context_string(latest_human, top_k=3)
-    return {"rag_context": context}
+    try:
+        rag = get_rag_pipeline()
+        context = rag.get_context_string(
+            latest_human,
+            top_k=3,
+        )
+
+        return {
+            "rag_context": context,
+        }
+
+    except Exception:
+        return {
+            "rag_context": None,
+        }
 
 
 def node_handle_lead_collection(state: AgentState, llm) -> dict:
     """
     Node 3: Handle progressive lead field collection.
+
     Extracts fields from user messages, prompts for missing ones,
     and fires the capture tool once all fields are collected.
     """
     messages = state.get("messages", [])
     collector_data = state.get("lead_collector_state")
-    collector = LeadCollector.from_dict(collector_data) if collector_data else LeadCollector()
+
+    collector = (
+        LeadCollector.from_dict(collector_data)
+        if collector_data
+        else LeadCollector()
+    )
 
     # Get latest human message
     latest_human = ""
+
     for msg in reversed(messages):
         if isinstance(msg, HumanMessage):
             latest_human = msg.content
@@ -204,37 +295,83 @@ def node_handle_lead_collection(state: AgentState, llm) -> dict:
 
     # Try to extract missing fields from current message
     for field in collector.missing_fields():
-        value = _extract_field_from_message(latest_human, field, collector)
+        value = _extract_field_from_message(
+            latest_human,
+            field,
+            collector,
+        )
+
         if value:
             collector.set_field(field, value)
             break  # Only extract one field per turn
 
     # All fields collected — execute capture
     if collector.is_complete() and not collector.is_captured:
-        result = collector.execute_capture()
+        try:
+            result = collector.execute_capture()
+
+        except Exception:
+            return {
+                "lead_collector_state": collector.to_dict(),
+                "lead_collection_active": True,
+                "lead_captured": False,
+                "response": (
+                    "I have all the details I need. "
+                    "I'm having a temporary issue saving them. "
+                    "Please try again in a moment."
+                ),
+            }
 
         # Generate closing message
         system = SYSTEM_PROMPT_CAPTURE.format(
-            lead_data=json.dumps(collector.collected, indent=2),
-            lead_id=result.get("lead_id", "N/A"),
+            lead_data=json.dumps(
+                collector.collected,
+                indent=2,
+            ),
+            lead_id=result.get(
+                "lead_id",
+                "N/A",
+            ),
         )
-        response = llm.invoke([SystemMessage(content=system)] + messages)
-        closing_message = response.content
+
+        closing_message = _safe_llm_invoke(
+            llm,
+            [SystemMessage(content=system)] + messages,
+            fallback=(
+                "Thanks! Your information has been captured successfully. "
+                "Our team will reach out within 24 hours."
+            ),
+        )
 
         return {
             "lead_collector_state": collector.to_dict(),
             "lead_captured": True,
             "lead_collection_active": False,
-            "messages": [AIMessage(content=closing_message)],
+            "messages": [
+                AIMessage(content=closing_message),
+            ],
             "response": closing_message,
         }
 
     # Still collecting — prompt for next field
     missing = collector.missing_fields()
+
     lead_status_lines = []
-    for f in ["name", "email", "platform"]:
-        status = collector.collected.get(f, "NOT YET COLLECTED")
-        lead_status_lines.append(f"  - {f}: {status}")
+
+    for field in [
+        "name",
+        "email",
+        "platform",
+    ]:
+        status = collector.collected.get(
+            field,
+            "NOT YET COLLECTED",
+        )
+
+        lead_status_lines.append(
+            f"  - {field}: {status}"
+        )
+
     lead_status = "\n".join(lead_status_lines)
 
     system = SYSTEM_PROMPT_LEAD.format(
@@ -245,16 +382,25 @@ def node_handle_lead_collection(state: AgentState, llm) -> dict:
 
     # Include RAG context if available
     rag_context = state.get("rag_context")
-    if rag_context and "No relevant" not in rag_context:
-        system += f"\n\nAdditional context if relevant:\n{rag_context}"
 
-    response = llm.invoke([SystemMessage(content=system)] + messages)
-    reply = response.content
+    if rag_context and "No relevant" not in rag_context:
+        system += (
+            f"\n\nAdditional context if relevant:\n"
+            f"{rag_context}"
+        )
+
+    reply = _safe_llm_invoke(
+        llm,
+        [SystemMessage(content=system)] + messages,
+        fallback=collector.next_prompt(),
+    )
 
     return {
         "lead_collector_state": collector.to_dict(),
         "lead_collection_active": True,
-        "messages": [AIMessage(content=reply)],
+        "messages": [
+            AIMessage(content=reply),
+        ],
         "response": reply,
     }
 
@@ -270,14 +416,29 @@ def node_generate_response(state: AgentState, llm) -> dict:
     if intent == Intent.GREETING.value:
         system = SYSTEM_PROMPT_GREETING
     else:
-        context = rag_context or "No specific context available. Provide a general, helpful response."
-        system = SYSTEM_PROMPT_PRODUCT.format(context=context)
+        context = (
+            rag_context
+            or "No specific context available. "
+            "Provide a general, helpful response."
+        )
 
-    response = llm.invoke([SystemMessage(content=system)] + messages)
-    reply = response.content
+        system = SYSTEM_PROMPT_PRODUCT.format(
+            context=context,
+        )
+
+    reply = _safe_llm_invoke(
+        llm,
+        [SystemMessage(content=system)] + messages,
+        fallback=(
+            "I'm temporarily unable to generate a response. "
+            "Please try again in a moment."
+        ),
+    )
 
     return {
-        "messages": [AIMessage(content=reply)],
+        "messages": [
+            AIMessage(content=reply),
+        ],
         "response": reply,
     }
 
@@ -285,13 +446,19 @@ def node_generate_response(state: AgentState, llm) -> dict:
 def node_activate_lead_flow(state: AgentState) -> dict:
     """
     Node 5: Transition into lead collection mode when high intent is detected.
+
     Initializes a fresh LeadCollector if one doesn't already exist.
     """
     existing = state.get("lead_collector_state")
+
     if not existing or not existing.get("collected"):
         fresh_collector = LeadCollector()
+
         return {
             "lead_collection_active": True,
             "lead_collector_state": fresh_collector.to_dict(),
         }
-    return {"lead_collection_active": True}
+
+    return {
+        "lead_collection_active": True,
+    }
