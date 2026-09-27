@@ -3,11 +3,12 @@ AutoStream Agent — LangGraph Graph Builder
 Wires all nodes into a conditional state machine graph.
 """
 
-import os
 from functools import partial
 from typing import Literal
 
 from langgraph.graph import StateGraph, END
+
+from core.config import get_settings
 from core.llm import build_llm
 from agent.state import AgentState
 from agent.intent_classifier import Intent
@@ -19,11 +20,18 @@ from agent.nodes import (
     node_activate_lead_flow,
 )
 
+
 # ---------------------------------------------------------------------------
 # Conditional Edge Routing
 # ---------------------------------------------------------------------------
 
-def route_after_intent(state: AgentState) -> Literal["activate_lead", "retrieve_context", "generate_response"]:
+def route_after_intent(
+    state: AgentState,
+) -> Literal[
+    "activate_lead",
+    "retrieve_context",
+    "generate_response",
+]:
     """Routes to the correct node after intent classification."""
     intent = state.get("current_intent")
     lead_active = state.get("lead_collection_active", False)
@@ -42,11 +50,15 @@ def route_after_intent(state: AgentState) -> Literal["activate_lead", "retrieve_
     return "generate_response"  # GREETING or fallback
 
 
-def route_after_retrieve(state: AgentState) -> Literal["generate_response"]:
+def route_after_retrieve(
+    state: AgentState,
+) -> Literal["generate_response"]:
     return "generate_response"
 
 
-def route_after_activate(state: AgentState) -> Literal["handle_lead_collection"]:
+def route_after_activate(
+    state: AgentState,
+) -> Literal["handle_lead_collection"]:
     return "handle_lead_collection"
 
 
@@ -61,21 +73,51 @@ def build_agent_graph(llm) -> StateGraph:
     builder = StateGraph(AgentState)
 
     # --- Bind LLM to nodes that need it ---
-    classify_node = partial(node_classify_intent, llm=llm)
-    lead_node = partial(node_handle_lead_collection, llm=llm)
-    response_node = partial(node_generate_response, llm=llm)
+    classify_node = partial(
+        node_classify_intent,
+        llm=llm,
+    )
+
+    lead_node = partial(
+        node_handle_lead_collection,
+        llm=llm,
+    )
+
+    response_node = partial(
+        node_generate_response,
+        llm=llm,
+    )
 
     # --- Register nodes ---
-    builder.add_node("classify_intent", classify_node)
-    builder.add_node("retrieve_context", node_retrieve_context)
-    builder.add_node("activate_lead", node_activate_lead_flow)
-    builder.add_node("handle_lead_collection", lead_node)
-    builder.add_node("generate_response", response_node)
+    builder.add_node(
+        "classify_intent",
+        classify_node,
+    )
+
+    builder.add_node(
+        "retrieve_context",
+        node_retrieve_context,
+    )
+
+    builder.add_node(
+        "activate_lead",
+        node_activate_lead_flow,
+    )
+
+    builder.add_node(
+        "handle_lead_collection",
+        lead_node,
+    )
+
+    builder.add_node(
+        "generate_response",
+        response_node,
+    )
 
     # --- Entry point ---
     builder.set_entry_point("classify_intent")
 
-    # --- Edges ---
+    # --- Conditional edges ---
     builder.add_conditional_edges(
         "classify_intent",
         route_after_intent,
@@ -84,12 +126,29 @@ def build_agent_graph(llm) -> StateGraph:
             "retrieve_context": "retrieve_context",
             "generate_response": "generate_response",
             "handle_lead_collection": "handle_lead_collection",
-        }
+        },
     )
-    builder.add_edge("retrieve_context", "generate_response")
-    builder.add_edge("activate_lead", "handle_lead_collection")
-    builder.add_edge("handle_lead_collection", END)
-    builder.add_edge("generate_response", END)
+
+    # --- Standard edges ---
+    builder.add_edge(
+        "retrieve_context",
+        "generate_response",
+    )
+
+    builder.add_edge(
+        "activate_lead",
+        "handle_lead_collection",
+    )
+
+    builder.add_edge(
+        "handle_lead_collection",
+        END,
+    )
+
+    builder.add_edge(
+        "generate_response",
+        END,
+    )
 
     return builder.compile()
 
@@ -101,12 +160,27 @@ def build_agent_graph(llm) -> StateGraph:
 class AutoStreamAgent:
     """
     High-level agent wrapper for CLI and API usage.
+
     Manages LangGraph graph + persistent state across turns.
     """
 
-    def __init__(self, provider: str = "anthropic", model: str = None):
-        self.llm = build_llm(provider=provider, model=model)
+    def __init__(
+        self,
+        provider: str = None,
+        model: str = None,
+    ):
+        settings = get_settings()
+
+        provider = provider or settings.llm_provider
+        model = model or settings.llm_model
+
+        self.llm = build_llm(
+            provider=provider,
+            model=model,
+        )
+
         self.graph = build_agent_graph(self.llm)
+
         self._state: AgentState = {
             "messages": [],
             "current_intent": None,
@@ -121,12 +195,15 @@ class AutoStreamAgent:
     def chat(self, user_message: str) -> str:
         """
         Process a user message and return the agent's response.
+
         State is persisted across calls.
         """
         from langchain_core.messages import HumanMessage
 
         # Append user message to state
-        self._state["messages"] = list(self._state.get("messages", [])) + [
+        self._state["messages"] = list(
+            self._state.get("messages", [])
+        ) + [
             HumanMessage(content=user_message)
         ]
 
@@ -136,7 +213,10 @@ class AutoStreamAgent:
         # Persist updated state
         self._state = result
 
-        return result.get("response", "I'm sorry, I didn't understand that. Could you rephrase?")
+        return result.get(
+            "response",
+            "I'm sorry, I didn't understand that. Could you rephrase?",
+        )
 
     def reset(self):
         """Resets conversation state for a new session."""
@@ -153,8 +233,14 @@ class AutoStreamAgent:
 
     @property
     def is_lead_captured(self) -> bool:
-        return self._state.get("lead_captured", False)
+        return self._state.get(
+            "lead_captured",
+            False,
+        )
 
     @property
     def turn_count(self) -> int:
-        return self._state.get("turn_count", 0)
+        return self._state.get(
+            "turn_count",
+            0,
+        )
