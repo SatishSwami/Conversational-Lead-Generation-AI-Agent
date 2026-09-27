@@ -1,204 +1,586 @@
-# AutoStream AI Agent 🎬
-> Social-to-Lead Agentic Workflow | Built with LangGraph + RAG + Tool Calling
+# Conversational Lead Generation AI Agent
 
-A production-grade conversational AI sales agent for **AutoStream** — a SaaS platform offering automated video editing tools for content creators. The agent qualifies leads through natural conversation, retrieves accurate product knowledge via RAG, and captures user details via a mock CRM API.
+> Production-oriented conversational AI agent for product discovery, intent detection, RAG-based knowledge retrieval, and structured lead capture.
 
----
-
-## Project Structure
-
-```
-autostream-agent/
-├── agent/
-│   ├── graph.py             # LangGraph graph builder + AutoStreamAgent wrapper
-│   ├── nodes.py             # All LangGraph node implementations
-│   ├── intent_classifier.py # Heuristic + LLM-based intent classification
-│   ├── rag_pipeline.py      # TF-IDF RAG over local JSON knowledge base
-│   └── state.py             # AgentState TypedDict schema
-├── tools/
-│   └── lead_capture.py      # LeadCollector, mock_lead_capture, LangChain tool
-├── utils/
-│   ├── logger.py            # Coloured structured logger
-│   └── session_manager.py   # Per-user session store (in-memory, Redis-ready)
-├── knowledge_base/
-│   └── autostream_kb.json   # Pricing, features, and policies knowledge base
-├── tests/
-│   └── test_agent.py        # Pytest test suite (35+ tests)
-├── main.py                  # CLI entrypoint
-├── webhook_server.py        # FastAPI server (REST + WhatsApp webhook)
-├── requirements.txt
-├── .env.example
-└── README.md
-```
+**Live API:** https://autostream-ai-agent-4gt2.onrender.com
 
 ---
 
-## Setup Instructions
+## Overview
 
-### 1. Clone & Install
+The Conversational Lead Generation AI Agent is a stateful conversational system designed to turn product-related conversations into qualified leads.
 
-```bash
-git clone https://github.com/your-username/autostream-agent.git
-cd autostream-agent
-python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-```
+The agent can:
 
-### 2. Configure Environment
+- Understand conversational user intent
+- Answer product and pricing questions using a local knowledge base
+- Retrieve relevant information using deterministic TF-IDF-based RAG
+- Maintain multi-turn conversation state using LangGraph
+- Detect high-intent prospects
+- Collect lead information progressively
+- Persist conversations, messages, and captured leads
+- Expose the agent through a FastAPI REST API
+- Protect API endpoints using API-key authentication
+- Support WhatsApp webhook integration
+- Run inside a Docker container
+- Handle LLM/provider failures gracefully
+- Provide request IDs and latency logging for observability
 
-```bash
-cp .env.example .env
-```
+The project is designed as a standalone professional engineering project with a focus on reliability, security, maintainability, and deployment readiness.
 
-Open `.env` and set your LLM API key. At minimum:
+---
 
-```env
-ANTHROPIC_API_KEY=sk-ant-...   # or OPENAI_API_KEY / GOOGLE_API_KEY
+## Architecture
+
+```text
+                         ┌──────────────────────┐
+                         │       Client         │
+                         │ CLI / REST / WhatsApp│
+                         └──────────┬───────────┘
+                                    │
+                                    ▼
+                         ┌──────────────────────┐
+                         │      FastAPI         │
+                         │  Authentication      │
+                         │  Request Validation  │
+                         │  Request ID / Logs   │
+                         └──────────┬───────────┘
+                                    │
+                                    ▼
+                         ┌──────────────────────┐
+                         │     LangGraph        │
+                         │     Agent State      │
+                         └──────────┬───────────┘
+                                    │
+                ┌───────────────────┼───────────────────┐
+                │                   │                   │
+                ▼                   ▼                   ▼
+       ┌────────────────┐  ┌────────────────┐  ┌────────────────┐
+       │ Intent         │  │ TF-IDF RAG     │  │ Lead Collection│
+       │ Classification │  │ Pipeline       │  │ Flow           │
+       └────────────────┘  └───────┬────────┘  └───────┬────────┘
+                                   │                    │
+                                   ▼                    ▼
+                         ┌──────────────────┐  ┌──────────────────┐
+                         │ Local Knowledge  │  │ Lead Capture     │
+                         │ Base             │  │ Service          │
+                         └──────────────────┘  └──────────────────┘
+
+                                    │
+                                    ▼
+                         ┌──────────────────────┐
+                         │ Configured LLM       │
+                         │ Google / OpenAI /     │
+                         │ Anthropic             │
+                         └──────────────────────┘
+
+                                    │
+                                    ▼
+                         ┌──────────────────────┐
+                         │ SQLAlchemy Database  │
+                         │ Conversations        │
+                         │ Messages             │
+                         │ Leads                │
+                         └──────────────────────┘
+Agent Workflow
+
+Every incoming message enters the LangGraph state machine.
+
+User Message
+     │
+     ▼
+Classify Intent
+     │
+     ├── Casual Greeting
+     │      └── Generate Response
+     │
+     ├── Product / Pricing Inquiry
+     │      └── Retrieve Relevant Context
+     │              └── Generate Response
+     │
+     └── High-Intent Lead
+            └── Activate Lead Collection
+                    └── Collect Lead Information
+
+The graph maintains conversation state across turns, allowing the agent to continue an ongoing lead-collection conversation instead of treating every request as an independent interaction.
+
+Intent Classification
+
+The system distinguishes between three primary conversational categories:
+
+CASUAL_GREETING
+PRODUCT_INQUIRY
+HIGH_INTENT_LEAD
+
+Intent classification is performed before routing the request through the graph.
+
+The resulting intent determines whether the system should:
+
+respond conversationally,
+retrieve information from the knowledge base,
+or activate the lead-capture workflow.
+RAG Pipeline
+
+The project uses a deterministic TF-IDF retrieval pipeline instead of an external vector database.
+
+The knowledge base is intentionally small and structured, so a lightweight local retrieval system provides:
+
+deterministic results,
+simple deployment,
+low infrastructure overhead,
+easy debugging,
+no dependency on an external vector database.
+
+The retrieval pipeline:
+
+Loads the local knowledge base.
+Tokenizes documents and queries.
+Calculates TF-IDF relevance.
+Applies query/entity/phrase matching.
+Applies intent-aware relevance boosts.
+Ranks candidate documents.
+Returns the most relevant context to the response-generation node.
+
+The default retrieval limit is three relevant results.
+
+Lead Capture
+
+When a user demonstrates high purchase intent, the agent activates the lead-collection workflow.
+
+The system progressively collects:
+
+Name
+  ↓
+Email
+  ↓
+Creator Platform
+
+The information is collected conversationally rather than through a single form.
+
+Once sufficient information has been collected, the lead is persisted through the lead repository.
+
+The system is designed to avoid triggering lead capture prematurely for ordinary greetings or low-intent questions.
+
+Database Persistence
+
+The application uses SQLAlchemy for durable application data.
+
+Conversation
+
+Stores:
+
+session ID
+creation timestamp
+update timestamp
+Message
+
+Stores:
+
+conversation/session
+role
+message content
+timestamp
+Lead
+
+Stores:
+
+session ID
+name
+email
+creator platform
+timestamps
+
+SQLite is used by default for local development.
+
+The database layer is structured so that PostgreSQL can be configured through:
+
+DATABASE_URL=...
+
+The active LangGraph state is maintained separately from durable business data.
+
+This allows the application to use active in-memory graph state during execution while persisting important conversation and lead information in the database.
+
+API
+Health Check
+GET /health
+
+Returns application and database health information.
+
+Example:
+
+{
+  "status": "ok",
+  "service": "AutoStream AI Agent",
+  "version": "1.0.0",
+  "database": "ok"
+}
+Chat
+POST /chat
+
+Requires:
+
+X-API-Key: <API_KEY>
+
+Request:
+
+{
+  "session_id": "user_001",
+  "message": "What plans do you offer?"
+}
+
+Response:
+
+{
+  "session_id": "user_001",
+  "response": "...",
+  "intent": "PRODUCT_INQUIRY",
+  "lead_captured": false,
+  "turn_count": 1
+}
+Reset Session
+POST /chat/reset?session_id=user_001
+
+Requires API authentication.
+
+Metrics
+GET /metrics
+
+Requires API authentication.
+
+WhatsApp
+GET /whatsapp
+POST /whatsapp
+
+The WhatsApp endpoints support Meta webhook verification and incoming WhatsApp messages.
+
+API Security
+
+Production API endpoints require an API key.
+
+The implementation uses:
+
+X-API-Key authentication
+constant-time comparison using hmac.compare_digest
+Pydantic request validation
+session ID validation
+message length limits
+production enforcement when no API key is configured
+WhatsApp HMAC-SHA256 signature verification
+no request-body logging
+no API-token logging
+
+The public health endpoint remains accessible without authentication so deployment platforms can perform health checks.
+
+Security Verification
+
+The deployed API was explicitly tested for:
+
+unauthenticated /chat requests → 401 Unauthorized
+invalid API keys → 401 Unauthorized
+authenticated /chat requests reaching the application successfully
+Request Observability
+
+Each API request receives a request ID.
+
+If a valid X-Request-ID is supplied, it is preserved.
+
+Otherwise, the application generates a UUID-based request ID.
+
+The application records:
+
+request_id
+HTTP method
+path
+HTTP status
+request duration
+
+Example:
+
+Request completed |
+request_id=... |
+method=POST |
+path=/chat |
+status=200 |
+duration_ms=...
+
+User message contents and authentication secrets are not logged.
+
+Reliability
+
+LLM calls are wrapped with controlled error handling.
+
+If the configured LLM provider becomes temporarily unavailable, the API does not expose the underlying provider exception directly to the user.
+
+Instead, the agent returns a controlled fallback response.
+
+This protects the API from crashing because of temporary external provider failures.
+
+LLM Provider Abstraction
+
+LLM construction is isolated behind a provider factory.
+
+Supported providers:
+
+Google Gemini
+OpenAI
+Anthropic
+
+Provider selection is controlled through environment configuration:
+
+LLM_PROVIDER=google
+LLM_MODEL=<model-name>
+
+This keeps provider-specific model construction outside the core LangGraph workflow and makes provider switching easier.
+
+Docker
+
+The application includes a production-oriented Dockerfile.
+
+The container:
+
+uses Python 3.11
+installs dependencies without retaining pip cache
+runs as a non-root appuser
+exposes port 8000
+includes a Docker health check
+keeps secrets outside the image
+copies only required application components
+Build
+docker build -t autostream-agent:latest .
+Run
+docker run -d \
+  --name autostream-agent \
+  -p 8000:8000 \
+  --env-file .env \
+  autostream-agent:latest
+Deployment
+
+The application is deployed as a Docker-based web service on Render.
+
+Live API
+
+https://autostream-ai-agent-4gt2.onrender.com
+
+Health Check
+
+https://autostream-ai-agent-4gt2.onrender.com/health
+
+Deployment flow:
+
+GitHub
+   ↓
+production-upgrade branch
+   ↓
+Render
+   ↓
+Docker build
+   ↓
+FastAPI / Uvicorn
+   ↓
+HTTPS API
+
+The public deployment has been verified with:
+
+public HTTPS health check
+database health check
+authenticated /chat request
+invalid API-key rejection
+Docker production testing
+Environment Configuration
+
+Create a local .env file.
+
+Example:
+
+ENV=development
+PORT=8000
+
+LLM_PROVIDER=google
+LLM_MODEL=<your-model>
+
+GOOGLE_API_KEY=<your-key>
+
+DATABASE_URL=sqlite:///./data/autostream.db
+
+API_KEY=<your-api-key>
+
+LOG_LEVEL=INFO
+
+Other supported providers:
+
 LLM_PROVIDER=anthropic
-```
+ANTHROPIC_API_KEY=<your-key>
 
-### 3. Run CLI (Recommended for Demo)
+or:
 
-```bash
+LLM_PROVIDER=openai
+OPENAI_API_KEY=<your-key>
+
+Never commit .env files or API keys to Git.
+
+Local Setup
+1. Clone
+git clone https://github.com/SatishSwami/Conversational-Lead-Generation-AI-Agent.git
+cd Conversational-Lead-Generation-AI-Agent
+2. Create Virtual Environment
+
+Windows:
+
+python -m venv venv
+venv\Scripts\activate
+
+Linux/macOS:
+
+python -m venv venv
+source venv/bin/activate
+3. Install Dependencies
+pip install -r requirements.txt
+4. Configure Environment
+
+Create .env with the required LLM provider API key and application configuration.
+
+5. Run CLI
 python main.py
-# With a specific provider:
-python main.py --provider openai
+
+Optional provider override:
+
 python main.py --provider google
-```
+6. Run API
+uvicorn webhook_server:app --host 0.0.0.0 --port 8000
+Testing
 
-**CLI commands during session:**
-- `debug` — print current intent, lead state, turn count
-- `reset` — start a new session
-- `quit` / `exit` — end session
+The project currently contains 83 automated tests covering:
 
-### 4. Run Webhook Server
+agent behavior
+intent classification
+RAG retrieval
+lead collection
+graph routing
+API behavior
+API security
+database persistence
+reliability
+configuration
+observability
 
-```bash
-uvicorn webhook_server:app --host 0.0.0.0 --port 8000 --reload
-```
+Run:
 
-Endpoints:
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/health` | Health check |
-| `POST` | `/chat` | Generic chat API |
-| `POST` | `/chat/reset?session_id=X` | Reset a session |
-| `GET` | `/whatsapp` | Meta webhook verification |
-| `POST` | `/whatsapp` | Incoming WhatsApp messages |
-| `GET` | `/metrics` | Active sessions + config |
+pytest -q
 
-**Test the REST API:**
-```bash
-curl -X POST http://localhost:8000/chat \
-  -H "Content-Type: application/json" \
-  -d '{"session_id": "user_001", "message": "Hi, what are your pricing plans?"}'
-```
+Expected result:
 
-### 5. Run Tests
+83 passed
+Example Conversation
+User:
+What plans do you offer?
 
-```bash
-pytest tests/ -v
-```
+Agent:
+The Basic plan is $29/month and the Pro plan is $79/month...
 
----
+A high-intent conversation can transition into:
 
-## Architecture Explanation (~200 words)
+User:
+I want to get started.
 
-The agent is built on **LangGraph**, a stateful graph execution framework built on top of LangChain. LangGraph was chosen over AutoGen because it provides explicit, inspectable state management through a typed `AgentState` schema — making the flow predictable, debuggable, and production-deployable.
+Agent:
+I'd be happy to help. What's your name?
 
-**Graph Flow:**
-1. **`classify_intent`** — Every user message is passed through a two-stage classifier: fast keyword heuristics first, then an LLM call for ambiguous inputs. This keeps latency low on simple cases.
-2. **`retrieve_context`** — For product queries, a TF-IDF RAG pipeline retrieves the top-3 relevant chunks from the local JSON knowledge base. No external vector DB is needed; the KB is small and deterministic.
-3. **`activate_lead` → `handle_lead_collection`** — When high intent is detected, the graph transitions into lead collection mode. A `LeadCollector` object (serialized into state) progressively gathers name, email, and platform — one field per turn — before calling `mock_lead_capture()`.
-4. **`generate_response`** — Greeting and product inquiry messages invoke the LLM with a RAG-augmented system prompt.
+User:
+Alex Johnson
 
-**State** is a `TypedDict` (`AgentState`) passed immutably between nodes. LangGraph's `add_messages` reducer handles message accumulation, giving the agent full multi-turn memory across 5–6+ conversation turns without external storage.
+Agent:
+What's the best email address to reach you?
 
----
+User:
+alex@example.com
 
-## WhatsApp Webhook Integration
+Agent:
+Which platform do you primarily create for?
 
-### How It Works
+User:
+YouTube
 
-WhatsApp (Meta Cloud API) sends incoming messages as HTTP POST requests to your server. Here's the end-to-end flow:
+The captured lead can then be persisted in the application database.
 
-```
-User (WhatsApp) → Meta Cloud API → POST /whatsapp → AutoStream Agent → POST graph.facebook.com → User (WhatsApp)
-```
+Project Structure
+.
+├── agent/
+│   ├── __init__.py
+│   ├── graph.py
+│   ├── intent_classifier.py
+│   ├── nodes.py
+│   ├── rag_pipeline.py
+│   └── state.py
+│
+├── core/
+│   ├── __init__.py
+│   ├── config.py
+│   └── llm.py
+│
+├── database/
+│   ├── __init__.py
+│   ├── connection.py
+│   ├── models.py
+│   └── repository.py
+│
+├── tools/
+│   ├── __init__.py
+│   └── lead_capture.py
+│
+├── utils/
+│   ├── logger.py
+│   └── session_manager.py
+│
+├── autostream_kb.json
+├── main.py
+├── webhook_server.py
+├── Dockerfile
+├── .dockerignore
+├── requirements.txt
+├── pytest.ini
+└── README.md
+Design Decisions
+Decision	Reason
+LangGraph	Explicit stateful conversational workflow
+TF-IDF RAG	Small static knowledge base does not require a vector database
+Intent-aware retrieval	Improves retrieval for targeted queries such as pricing
+SQLAlchemy	Structured persistence and database portability
+SQLite default	Simple local development
+PostgreSQL compatibility	Allows deployment with a PostgreSQL database
+LLM provider factory	Keeps provider-specific construction isolated
+FastAPI	Lightweight typed REST API
+API-key authentication	Protects application endpoints
+Request IDs	Enables request tracing
+Docker	Reproducible deployment environment
+Non-root container	Reduces container privilege
+Graceful LLM fallback	Prevents provider failures from crashing the API
+Production Considerations
 
-### Step-by-Step Setup
+The current implementation is intentionally lightweight while following production-oriented engineering practices.
 
-**1. Create a Meta App**
-- Go to [developers.facebook.com](https://developers.facebook.com)
-- Create a new App → Business type → Add WhatsApp product
+Potential future improvements include:
 
-**2. Configure the Webhook**
-- In WhatsApp → Configuration → Webhook URL: `https://your-domain.com/whatsapp`
-- Verify Token: set the same value as `WHATSAPP_VERIFY_TOKEN` in your `.env`
-- Subscribe to: `messages`
+PostgreSQL as the primary production database
+Redis-backed distributed session state
+centralized log aggregation
+metrics and distributed tracing
+background job processing
+rate limiting
+automated CI/CD
+dedicated secret management
+persistent vector retrieval for larger knowledge bases
+automated LLM response evaluation
 
-**3. Expose Your Server**
-```bash
-# For local development, use ngrok:
-ngrok http 8000
-# Use the HTTPS URL ngrok gives you as your webhook URL
-```
+These are future scalability considerations and are not claimed as currently implemented features.
 
-**4. Set Environment Variables**
-```env
-WHATSAPP_VERIFY_TOKEN=autostream_verify_2024
-WHATSAPP_APP_SECRET=<from Meta App Dashboard>
-WHATSAPP_ACCESS_TOKEN=<temporary or permanent token from Meta>
-WHATSAPP_PHONE_NUMBER_ID=<from Meta → WhatsApp → API Setup>
-```
+License
 
-**5. Security**
-Every incoming POST from Meta is signed with HMAC-SHA256 using your App Secret. The `_verify_whatsapp_signature()` function in `webhook_server.py` validates this before processing any message.
+MIT
 
-**Session Isolation:** Each WhatsApp sender (`from` number) gets its own isolated session via `session_id = f"wa_{phone_number}"`, preserving full conversation context per user.
 
----
+### Now do this
 
-## Conversation Flow Example
+After saving the file, run:
 
-```
-You:  Hi there!
-Aria: Hello! Welcome to AutoStream — AI-powered video editing for creators...
-
-You:  What does the Pro plan include?
-Aria: The Pro plan is $79/month and includes unlimited videos, 4K export,
-      AI captions, 24/7 support, and 500GB cloud storage...
-
-You:  That sounds great. I want to try the Pro plan for my YouTube channel.
-Aria: Awesome! I'd love to get you started. Could you share your full name?
-
-You:  Alex Johnson
-Aria: Great, Alex! What's the best email address to reach you at?
-
-You:  alex@gmail.com
-Aria: Perfect! Which platform do you primarily create for?
-
-You:  YouTube
-Aria: You're all set, Alex! I've registered your interest in the Pro plan...
-      [Lead captured: LEAD-04291 | alex@gmail.com | YouTube]
-```
-
----
-
-## Key Design Decisions
-
-| Decision | Rationale |
-|---|---|
-| TF-IDF RAG (no vector DB) | KB is small and static; avoids Chroma/Pinecone overhead |
-| Heuristic + LLM intent | Fast on clear signals, accurate on ambiguous ones |
-| Field-by-field collection | More natural UX; avoids overwhelming users with forms |
-| LangGraph over chains | Explicit state machine; easier to extend and debug |
-| Serialized LeadCollector | State survives graph re-invocation across turns |
-| In-memory sessions (Redis-ready) | Simple default; swap `SessionStore` backend for production |
-
----
-
-## License
-
-MIT — built for the ServiceHive / Inflx ML Internship Assignment.
+```powershell
+git diff --check
